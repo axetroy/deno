@@ -96,6 +96,13 @@ const acceptRanges: acceptRange[] = [
 // An invalid encoding is considered a full Rune since it will convert as a width-1 error rune.
 
 export function fullRune(p: Uint8Array): boolean {
+  p = new Uint8Array(
+    new TextDecoder()
+      .decode(p)
+      .split("")
+      .map((v: string) => v.charCodeAt(0))
+  );
+
   const n = p.length;
   if (n === 0) {
     return false;
@@ -119,29 +126,107 @@ export function fullRune(p: Uint8Array): boolean {
 
 // FullRuneInString is like FullRune but its input is a string.
 export function fullRuneInString(s: string): boolean {
-  const n = s.length;
-  if (n === 0) {
-    return false;
+  return fullRune(new TextEncoder().encode(s));
+}
+
+export interface decodeRuneResult {
+  rune: number;
+  size: number;
+}
+
+// DecodeRune unpacks the first UTF-8 encoding in p and returns the rune and
+// its width in bytes. If p is empty it returns (RuneError, 0). Otherwise, if
+// the encoding is invalid, it returns (RuneError, 1). Both are impossible
+// results for correct, non-empty UTF-8.
+//
+// An encoding is invalid if it is incorrect UTF-8, encodes a rune that is
+// out of range, or is not the shortest possible UTF-8 encoding for the
+// value. No other validation is performed.
+export function decodeRune(p: Uint8Array | string): decodeRuneResult {
+  const raw = (p instanceof Uint8Array
+    ? new TextDecoder().decode(p)
+    : p) as string;
+  p = new Uint8Array(raw.split("").map((v: string) => v.charCodeAt(0)));
+
+  const n = p.length;
+  if (n < 1) {
+    return {
+      rune: RuneError.charCodeAt(0),
+      size: 0
+    };
   }
 
-  const x = first[s[0]];
-  if (n >= (x & 7)) {
-    return true; // ASCII, invalid or valid.
+  const p0 = p[0];
+  const x = first[p0];
+  if (x >= as) {
+    // The following code simulates an additional check for x == xx and
+    // handling the ASCII and invalid cases accordingly. This mask-and-or
+    // approach prevents an additional branch.
+    const mask = (x << 31) >> 31;
+    return {
+      rune: (p[0] & ~mask) | (RuneError.charCodeAt(0) & mask),
+      size: 1
+    };
   }
-  // Must be short or invalid.
+
+  const sz = x & 7;
   const accept = acceptRanges[x >> 4];
 
-  if (
-    n > 1 &&
-    (s[1].charCodeAt(0) < accept.lo || accept.hi < s[1].charCodeAt(0))
-  ) {
-    return true;
-  } else if (
-    n > 2 &&
-    (s[2].charCodeAt(0) < locb || hicb < s[2].charCodeAt(0))
-  ) {
-    return true;
+  if (n < sz) {
+    return {
+      rune: RuneError.charCodeAt(0),
+      size: 1
+    };
   }
 
-  return false;
+  const b1 = p[1];
+
+  if (b1 < accept.lo || accept.hi < b1) {
+    return {
+      rune: RuneError.charCodeAt(0),
+      size: 1
+    };
+  }
+
+  if (sz <= 2) {
+    // <= instead of == to help the compiler eliminate some bounds checks
+    return {
+      rune: ((p0 & mask2) << 6) | (b1 & maskx),
+      size: 2
+    };
+  }
+
+  const b2 = p[2];
+
+  if (b2 < locb || hicb < b2) {
+    return {
+      rune: RuneError.charCodeAt(0),
+      size: 1
+    };
+  }
+
+  if (sz <= 3) {
+    return {
+      rune: ((p0 & mask3) << 12) | ((b1 & maskx) << 6) | (b2 & maskx),
+      size: 3
+    };
+  }
+
+  const b3 = p[3];
+
+  if (b3 < locb || hicb < b3) {
+    return {
+      rune: RuneError.charCodeAt(0),
+      size: 1
+    };
+  }
+
+  return {
+    rune:
+      ((p0 & mask4) << 18) |
+      ((b1 & maskx) << 12) |
+      ((b2 & maskx) << 6) |
+      (b3 & maskx),
+    size: 4
+  };
 }

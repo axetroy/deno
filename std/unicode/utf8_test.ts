@@ -1,8 +1,8 @@
 // Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
 
-import { fullRune, fullRuneInString } from "./utf8.ts";
+import { fullRune, fullRuneInString, decodeRune, RuneError } from "./utf8.ts";
 import { test, runIfMain } from "../testing/mod.ts";
-import { assertEquals, assertThrows } from "../testing/asserts.ts";
+import { assertEquals, fail } from "../testing/asserts.ts";
 
 interface Utf8Map {
   r: unknown;
@@ -59,7 +59,6 @@ const testStrings = [
 ];
 
 test(function utf8FullRune(): void {
-  let index = 0;
   for (const m of utf8map) {
     const b = new TextEncoder().encode(m.str);
 
@@ -68,10 +67,194 @@ test(function utf8FullRune(): void {
     const s = m.str;
     assertEquals(fullRuneInString(s), true);
 
-    const b1 = b.slice(0, b.length - 1);
-    console.log(b1, b, index);
+    const b1 = b.slice(0, b.length - 2);
     assertEquals(fullRune(b1), false);
-    index++;
+
+    const s1 = new TextDecoder().decode(b1);
+    assertEquals(fullRuneInString(s1), false);
+  }
+
+  for (const s of ["\xc0", "\xc1"]) {
+    const b = new TextEncoder().encode(s);
+
+    assertEquals(fullRune(b), true);
+    assertEquals(fullRuneInString(s), true);
+  }
+});
+
+test(function utf8DecodeRune(): void {
+  for (const m of utf8map) {
+    const b = new TextEncoder().encode(m.str);
+    const bLen = new TextDecoder().decode(b).length;
+
+    const { rune: r, size: z } = decodeRune(b);
+
+    if (r != m.r || z != bLen) {
+      fail(
+        `DecodeRune: expect ${m.r} but got ${r}, and expect ${bLen} but got ${z}`
+      );
+    }
+
+    {
+      const { rune: r, size: z } = decodeRune(m.str);
+
+      const bLen = m.str.length;
+
+      if (r != m.r || z != bLen) {
+        fail(
+          `DecodeRune: expect ${m.r} but got ${r}, and expect ${bLen} but got ${z}`
+        );
+      }
+    }
+
+    // function cap(p: Uint8Array): number {
+    //   const n = new TextDecoder().decode(p).length;
+    //   return n + (8 - (n % 8));
+    // }
+
+    // function paddingZero(p: Uint8Array, length: number): Uint8Array {
+    //   p = new Uint8Array(
+    //     new TextDecoder()
+    //       .decode(p)
+    //       .split("")
+    //       .map((v: string) => v.charCodeAt(0))
+    //   );
+
+    //   const u = new Uint8Array(length);
+    //   for (let i = 0; i < u.length; i++) {
+    //     u[i] = p[i] || 0;
+    //   }
+    //   return u;
+    // }
+
+    // {
+    //   // there's an extra byte that bytes left behind - make sure trailing byte works
+    //   const d = paddingZero(b, cap(b));
+    //   console.log(cap(b), b.length / 2, d);
+    //   const { rune: r, size: z } = decodeRune(d);
+
+    //   const bLen = new TextDecoder().decode(b).length;
+
+    //   if (r != m.r || z != bLen) {
+    //     fail(
+    //       `DecodeRune: expect ${m.r} but got ${r}, and expect ${bLen} but got ${z}`
+    //     );
+    //   }
+    // }
+
+    {
+      const s = m.str + "\x00";
+
+      const { rune: r, size: z } = decodeRune(s);
+
+      const bLen = m.str.length;
+
+      if (r != m.r || z != bLen) {
+        fail(
+          `DecodeRune: expect ${m.r} but got ${r}, and expect ${bLen} but got ${z}`
+        );
+      }
+    }
+
+    // make sure missing bytes fail
+    let wantsize = 1;
+
+    if (wantsize >= bLen) {
+      wantsize = 0;
+    }
+
+    {
+      const { rune: r, size: z } = decodeRune(b.slice(0, b.length - 2));
+
+      if (r != RuneError.charCodeAt(0) || z != wantsize) {
+        fail(
+          `DecodeRune: expect ${RuneError.charCodeAt(
+            0
+          )} but got ${r}, and expect ${wantsize} but got ${z}`
+        );
+      }
+    }
+
+    {
+      const s = m.str.slice(0, m.str.length - 1);
+
+      const { rune: r, size: z } = decodeRune(s);
+
+      if (r != RuneError.charCodeAt(0) || z != wantsize) {
+        fail(
+          `DecodeRune: expect ${RuneError.charCodeAt(
+            0
+          )} but got ${r}, and expect ${wantsize} but got ${z}`
+        );
+      }
+    }
+
+    // make sure bad sequences fail
+    const bb = new Uint8Array(
+      new TextDecoder()
+        .decode(b)
+        .split("")
+        .map((v: string) => v.charCodeAt(0))
+    );
+    if (bb.length == 1) {
+      bb[0] = 0x80;
+    } else {
+      bb[bb.length - 1] = 0x7f;
+    }
+
+    {
+      const { rune: r, size: z } = decodeRune(bb);
+
+      if (r != RuneError.charCodeAt(0) || z != 1) {
+        fail(
+          `DecodeRune: expect ${RuneError.charCodeAt(
+            0
+          )} but got ${r}, and expect ${1} but got ${z}`
+        );
+      }
+    }
+
+    {
+      const { rune: r, size: z } = decodeRune(new TextDecoder().decode(bb));
+
+      if (r != RuneError.charCodeAt(0) || z != 1) {
+        fail(
+          `DecodeRune: expect ${RuneError.charCodeAt(
+            0
+          )} but got ${r}, and expect ${1} but got ${z}`
+        );
+      }
+    }
+  }
+});
+
+test(function utf8DecodeSurrogateRune(): void {
+  for (const m of surrogateMap) {
+    {
+      const b = new TextEncoder().encode(m.str);
+      const { rune: r, size: z } = decodeRune(b);
+
+      if (r != RuneError.charCodeAt(0) || z != 1) {
+        fail(
+          `DecodeRune: expect ${RuneError.charCodeAt(
+            0
+          )} but got ${r}, and expect ${1} but got ${z}`
+        );
+      }
+    }
+
+    {
+      const s = m.str;
+      const { rune: r, size: z } = decodeRune(s);
+
+      if (r != RuneError.charCodeAt(0) || z != 1) {
+        fail(
+          `DecodeRune: expect ${RuneError.charCodeAt(
+            0
+          )} but got ${r}, and expect ${1} but got ${z}`
+        );
+      }
+    }
   }
 });
 
