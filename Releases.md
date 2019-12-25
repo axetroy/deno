@@ -6,7 +6,7 @@ https://github.com/denoland/deno/releases
 We also have one-line install commands at
 https://github.com/denoland/deno_install
 
-### v0.27.0 / 2019.12.18
+### v0.28.0 / 2019.12.18
 
 - feat: Support utf8 in file_server (#3495)
 - feat: add help & switch to flags to file_server (#3489)
